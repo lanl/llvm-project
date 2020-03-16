@@ -117,15 +117,19 @@ void CilkABI::addHelperAttributes(Function &Helper) {
 
 CilkABI::CilkABI(Module &M) : TapirTarget(M) {
   LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
   Type *VoidPtrTy = Type::getInt8PtrTy(C);
   Type *Int64Ty = Type::getInt64Ty(C);
   Type *Int32Ty = Type::getInt32Ty(C);
   Type *Int16Ty = Type::getInt16Ty(C);
+  Type* SizeTTy = Int64Ty;
 
   // Get or create local definitions of Cilk RTS structure types.
   PedigreeTy = StructType::lookupOrCreate(C, "struct.__cilkrts_pedigree");
   StackFrameTy = StructType::lookupOrCreate(C, "struct.__cilkrts_stack_frame");
   WorkerTy = StructType::lookupOrCreate(C, "struct.__cilkrts_worker");
+  MonoidTy = StructType::lookupOrCreate(C, "struct.cilk_c_monoid");
+  HyperBaseTy = StructType::lookupOrCreate(C, "struct.__cilkrts_hyperobject_base");
 
   if (PedigreeTy->isOpaque())
     PedigreeTy->setBody(Int64Ty, PointerType::getUnqual(PedigreeTy));
@@ -160,6 +164,22 @@ CilkABI::CilkABI(Module &M) : TapirTarget(M) {
                       VoidPtrTy, // sysdep
                       PedigreeTy // pedigree
                       );
+    if (MonoidTy->isOpaque()) {
+      Type* reducefn = PointerType::getUnqual(FunctionType::get(VoidTy, {VoidPtrTy, VoidPtrTy, VoidPtrTy}, false));
+      Type* identityfn = PointerType::getUnqual(FunctionType::get(VoidTy, {VoidPtrTy, VoidPtrTy}, false));
+      Type* destroyfn = PointerType::getUnqual(FunctionType::get(VoidTy, {VoidPtrTy, VoidPtrTy}, false));
+      Type* allocatefn = PointerType::getUnqual(FunctionType::get(VoidPtrTy, {VoidPtrTy, SizeTTy}, false));
+      Type* deallocatefn = PointerType::getUnqual(FunctionType::get(VoidTy, {VoidPtrTy, VoidPtrTy}, false));
+      MonoidTy->setBody(reducefn, identityfn, destroyfn, allocatefn, deallocatefn);
+    }
+
+    if (HyperBaseTy->isOpaque()) {
+      HyperBaseTy->setBody(MonoidTy,
+                           SizeTTy,//flags
+                           SizeTTy,//view_offset
+                           SizeTTy//view_size
+                           );
+  }
 }
 
 // Accessors for opaque Cilk RTS functions
@@ -179,6 +199,79 @@ FunctionCallee CilkABI::Get__cilkrts_get_nworkers() {
   CilkRTSGetNworkers = M.getOrInsertFunction("__cilkrts_get_nworkers", FTy, AL);
   return CilkRTSGetNworkers;
 }
+
+FunctionCallee CilkABI::Get__cilkrts_hyper_lookup() {
+  if (CilkRTSHyperLookup)
+    return CilkRTSHyperLookup;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  Type* HyperPtr = PointerType::getUnqual(HyperBaseTy);
+  CilkRTSHyperLookup = M.getOrInsertFunction("__cilkrts_hyper_lookup", VoidPtrTy, HyperPtr);
+
+  return CilkRTSHyperLookup;
+}
+
+FunctionCallee CilkABI::Get__cilkrts_hyper_create() {
+  if (CilkRTSHyperCreate)
+    return CilkRTSHyperCreate;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type* HyperPtr = PointerType::getUnqual(HyperBaseTy);
+  CilkRTSHyperCreate = M.getOrInsertFunction("__cilkrts_hyper_create", VoidTy, HyperPtr);
+
+  return CilkRTSHyperCreate;
+}
+
+FunctionCallee CilkABI::Get__cilkrts_hyper_destroy() {
+  if (CilkRTSHyperDestroy)
+    return CilkRTSHyperDestroy;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type* HyperPtr = PointerType::getUnqual(HyperBaseTy);
+  CilkRTSHyperDestroy = M.getOrInsertFunction("__cilkrts_hyper_destroy", VoidTy, HyperPtr);
+
+  return CilkRTSHyperDestroy;
+}
+
+FunctionCallee CilkABI::Get__cilkrts_hyperobject_noop_destroy() {
+  if (CilkRTSHyperObjDestroy)
+    return CilkRTSHyperObjDestroy;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  CilkRTSHyperObjDestroy = M.getOrInsertFunction("__cilkrts_hyperobject_noop_destroy", VoidTy, VoidPtrTy, VoidPtrTy);
+
+  return CilkRTSHyperObjDestroy;
+}
+
+FunctionCallee CilkABI::Get__cilkrts_hyperobject_alloc() {
+  if (CilkRTSHyperObjAlloc)
+    return CilkRTSHyperObjAlloc;
+
+  LLVMContext &C = M.getContext();
+  Type *Int64Ty = Type::getInt64Ty(C);
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  CilkRTSHyperObjAlloc = M.getOrInsertFunction("__cilkrts_hyperobject_alloc", VoidPtrTy, VoidPtrTy, Int64Ty);
+
+  return CilkRTSHyperObjAlloc;
+}
+
+FunctionCallee CilkABI::Get__cilkrts_hyperobject_dealloc() {
+  if (CilkRTSHyperObjDealloc)
+    return CilkRTSHyperObjDealloc;
+
+  LLVMContext &C = M.getContext();
+  Type *VoidTy = Type::getVoidTy(C);
+  Type *VoidPtrTy = Type::getInt8PtrTy(C);
+  CilkRTSHyperObjDealloc = M.getOrInsertFunction("__cilkrts_hyperobject_dealloc", VoidTy, VoidPtrTy, VoidPtrTy);
+
+  return CilkRTSHyperObjDealloc;
+}
+
 
 FunctionCallee CilkABI::Get__cilkrts_init() {
   if (CilkRTSInit)
@@ -1709,16 +1802,196 @@ static inline void inlineCilkFunctions(Function &F) {
 
 void CilkABI::preProcessFunction(Function &F, TaskInfo &TI,
                                  bool OutliningTapirLoops) {
+
   if (OutliningTapirLoops)
     // Don't do any preprocessing when outlining Tapir loops.
     return;
 
   LLVM_DEBUG(dbgs() << "CilkABI processing function " << F.getName() << "\n");
+
   if (fastCilk && F.getName() == "main") {
     IRBuilder<> B(F.getEntryBlock().getTerminator());
     B.CreateCall(CILKRTS_FUNC(init));
   }
+  
+  Type *Int64Ty = Type::getInt64Ty(F.getContext());
+  Type *Int32Ty = Type::getInt32Ty(F.getContext());
+  Type* SizeTTy = Int64Ty;
+
+  SmallVector<AllocaInst*,4> reducers;
+  SmallVector<ReturnInst*,4> rets;
+  llvm::errs() << "CilkABI processing function " << F.getName() << "\n";
+  for(auto &BB: F) {
+    for(auto &inst : BB) {
+      if (auto ai = dyn_cast<AllocaInst>(&inst)) {
+        if (ai->isReducer()) {
+          reducers.push_back(ai);
+        }
+        llvm::errs() << " ai: " << *ai << "\n";
+      }
+
+      if (auto rt = dyn_cast<ReturnInst>(&inst)) {
+        rets.push_back(rt);
+      }
+    }
+  }
+
+  for(auto red : reducers) {
+    llvm::errs() << " saw reducer: " << *red << "\n";
+    IRBuilder <>B(red);
+    auto htTy = StructType::lookupOrCreate(red->getContext(), "reducer."+std::to_string((size_t)(void*)red->getAllocatedType()));
+    uint64_t viewSize = 0;
+    {
+      auto optional_size = red->getAllocationSizeInBits(F.getParent()->getDataLayout());
+      assert(optional_size.hasValue());
+      viewSize = (*optional_size) / 8;
+    }
+
+    if (htTy->isOpaque()) {
+      auto size = viewSize + F.getParent()->getDataLayout().getTypeSizeInBits(HyperBaseTy)/8;
+      auto roundUp = ( (size + 63) / 64 ) * 64;
+      Type* cache_buffer = ArrayType::get(Type::getInt8Ty(red->getContext()), roundUp - size); 
+      htTy->setBody(HyperBaseTy, red->getAllocatedType(), cache_buffer);
+    }
+
+    auto rtreducer = B.CreateAlloca(htTy);
+    rtreducer->setAlignment(64);
+	  llvm::errs() << "rtreducer: " << *rtreducer << "\n";
+    Value* hyperbase = B.CreateInBoundsGEP(rtreducer, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)});
+	  Value* monoid = B.CreateInBoundsGEP(hyperbase, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)});
+
+	  auto getMeta = [&](std::string st, Constant* fn=nullptr) -> Value* {
+    auto md = red->getMetadata(st);
+    if (!md || !isa<MDTuple>(md)) {
+		  if (fn) {
+			  llvm::errs() << "fn: " << *fn << "\n";
+			  return fn;
+		  }
+
+      llvm::errs() << *red << "\n";
+
+		  if (md)
+        llvm::errs() << *md << "\n";
+      assert(0 && "cannot compute with global variable that doesn't have marked shadow global");
+      report_fatal_error("cannot compute with global variable that doesn't have marked shadow global (metadata incorrect type)");
+    }
+	  assert(md);
+    auto md2 = cast<MDTuple>(md);
+    assert(md2->getNumOperands() == 1);
+	  llvm::errs() << " md2: " << *md2 << "\n";
+    if (md2->getOperand(0) == nullptr) {
+		  if (fn) {
+			  llvm::errs() << "fn: " << *fn << "\n";
+			  return fn;
+		    }
+
+      llvm::errs() << *red << "\n";
+
+		  if (md)
+        llvm::errs() << *md << "\n";
+        assert(0 && "cannot compute with global variable that doesn't have marked shadow global");
+        report_fatal_error("cannot compute with global variable that doesn't have marked shadow global (metadata incorrect type)");
+      }
+	  
+      llvm::errs() << " md2-op: " << *md2->getOperand(0) << "\n";
+      auto gvemd = cast<ValueAsMetadata>(md2->getOperand(0));
+      auto cs = gvemd->getValue();
+	    return cs;
+ 	  };
+
+    llvm::errs() << " monoid: " << *monoid << "\n";
+    auto m00 = B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 0)});
+    llvm::errs() << "m00: " << *m00 << "\n";
+    B.CreateStore(getMeta("reduce"), m00);
+    B.CreateStore(getMeta("identity"), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 1)}));
+    B.CreateStore(getMeta("destroy", dyn_cast<llvm::Constant>(CILKRTS_FUNC(hyperobject_noop_destroy).getCallee())), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 2)}));
+    B.CreateStore(getMeta("alloc", dyn_cast<llvm::Constant>(CILKRTS_FUNC(hyperobject_alloc).getCallee())), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 3)}));
+    B.CreateStore(getMeta("dealloc", dyn_cast<llvm::Constant>(CILKRTS_FUNC(hyperobject_dealloc).getCallee())), B.CreateInBoundsGEP(monoid, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 4)}));
+
+    //flags
+    B.CreateStore(ConstantInt::get(SizeTTy, 0), B.CreateInBoundsGEP(hyperbase, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 1)}));
+    //offset of leftmost view
+    B.CreateStore(ConstantInt::get(SizeTTy,  F.getParent()->getDataLayout().getTypeSizeInBits(HyperBaseTy)/8 ), B.CreateInBoundsGEP(hyperbase, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 2)}));
+    //size of view
+    B.CreateStore(ConstantInt::get(SizeTTy, viewSize), B.CreateInBoundsGEP(hyperbase, {ConstantInt::get(Int64Ty, 0), ConstantInt::get(Int32Ty, 3)}));
+
+	  //llvm::errs() << "hyper_create: " << *CILKRTS_FUNC(hyper_create) << "\nhyperbase: " << *hyperbase << "\n";
+
+    B.CreateCall(CILKRTS_FUNC(hyper_create), hyperbase);
+    
+    IRBuilder <>EB(&*F.getEntryBlock().begin());
+
+    Value* hyperalloca = EB.CreateAlloca(hyperbase->getType());
+
+    B.CreateStore(hyperbase, hyperalloca);
+
+	  std::vector<std::pair<Instruction*, unsigned>> toreplace;
+    for(auto &user: red->uses()) {
+		  toreplace.push_back(std::make_pair(cast<Instruction>(user.getUser()), user.getOperandNo()));
+	  }
+
+	  for(auto pair : toreplace) {
+		  auto user = pair.first;
+      llvm::errs() << " + replace reducer use: " << *user << "\n";
+      B.SetInsertPoint(user);
+        
+      llvm::Value* replacement = nullptr;
+      if (auto cb = dyn_cast<CallBase>(user)) {
+        llvm::errs() << " + + callbase: " << *cb << " p.s: " << pair.second << "\n";
+        if (cb->paramHasAttr(pair.second, Attribute::Reducer)) {
+          llvm::errs() << " + + callbase red: " << *cb << "\n";
+          replacement = B.CreatePointerCast(hyperbase, red->getType());
+          cb->removeParamAttr(pair.second, Attribute::Reducer);
+        }
+      }
+
+      if (replacement == nullptr) {
+        replacement = B.CreatePointerCast(B.CreateCall(CILKRTS_FUNC(hyper_lookup), hyperbase), red->getType());
+      }
+
+		  user->setOperand(pair.second, replacement);
+    }
+
+    for(auto ret: rets) {
+      B.SetInsertPoint(ret);
+      //TODO consider checking if null
+      B.CreateCall(CILKRTS_FUNC(hyper_destroy), B.CreateLoad(hyperalloca));
+    }
+  }
+
+  for(auto &arg : F.args()) {
+    if (arg.hasAttribute(Attribute::Reducer)) {
+      llvm::errs() << "argreducer: " << arg << "\n";
+
+      std::vector<std::pair<Instruction*, unsigned>> toreplace;
+      for(auto &user: arg.uses()) {
+        toreplace.push_back(std::make_pair(cast<Instruction>(user.getUser()), user.getOperandNo()));
+      }
+
+      for(auto pair : toreplace) {
+        auto user = pair.first;
+        llvm::errs() << " + replace arg reducer use: " << *user << "\n";
+        IRBuilder <> B(user);
+            
+        llvm::Value* replacement = nullptr;
+        if (auto cb = dyn_cast<CallBase>(user)) {
+          if (cb->paramHasAttr(pair.second, Attribute::Reducer)) {
+            replacement = &arg;
+            cb->removeParamAttr(pair.second, Attribute::Reducer);
+          }
+        }
+
+        if (replacement == nullptr) {
+          replacement = B.CreatePointerCast(B.CreateCall(CILKRTS_FUNC(hyper_lookup), B.CreatePointerCast(&arg, PointerType::getUnqual(HyperBaseTy) )), arg.getType());
+        }
+        user->setOperand(pair.second, replacement);
+      }
+
+      arg.removeAttr(Attribute::Reducer);
+    }
+  }
 }
+
 
 void CilkABI::postProcessFunction(Function &F, bool OutliningTapirLoops) {
   if (OutliningTapirLoops)

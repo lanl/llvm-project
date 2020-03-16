@@ -204,6 +204,9 @@ def SanitizeCilk : EnumAttr<"sanitize_cilk">;
 /// such functions.
 def Stealable : EnumAttr<"stealable">;
 
+/// Reduction/reducer support for Tapir.
+def Reducer : EnumAttr<"reducer">;
+
 /// Argument is swift error.
 def SwiftError : EnumAttr<"swifterror">;
 

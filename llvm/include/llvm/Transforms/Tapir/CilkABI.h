@@ -77,6 +77,27 @@ class CilkABI : public TapirTarget {
   FunctionCallee Get__cilkrts_get_tls_worker();
   FunctionCallee Get__cilkrts_get_tls_worker_fast();
   FunctionCallee Get__cilkrts_bind_thread_1();
+  
+  // From Billy's reducer code... 
+  StructType *MonoidTy = nullptr;
+  StructType *HyperBaseTy = nullptr;
+  
+  FunctionCallee CilkRTSHyperLookup = nullptr;
+  FunctionCallee CilkRTSHyperCreate = nullptr;
+  FunctionCallee CilkRTSHyperDestroy = nullptr;
+  FunctionCallee Get__cilkrts_hyper_lookup();
+  FunctionCallee Get__cilkrts_hyper_create();
+  FunctionCallee Get__cilkrts_hyper_destroy();
+
+  FunctionCallee CilkRTSHyperObjDestroy = nullptr;
+  FunctionCallee Get__cilkrts_hyperobject_noop_destroy();
+
+  FunctionCallee CilkRTSHyperObjAlloc = nullptr;
+  FunctionCallee Get__cilkrts_hyperobject_alloc();
+
+  FunctionCallee CilkRTSHyperObjDealloc = nullptr;
+  FunctionCallee Get__cilkrts_hyperobject_dealloc();
+
   // Accessors for compiler-generated Cilk RTS functions
   Function *Get__cilkrts_enter_frame_1();
   Function *Get__cilkrts_enter_frame_fast_1();

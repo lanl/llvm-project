@@ -114,8 +114,9 @@ void getDetachUnwindPHIUses(DetachInst *DI,
 class TapirLoopHints {
 public:
   enum SpawningStrategy {
-    ST_SEQ,
-    ST_DAC,
+    ST_SEQ,  // Sequential strategy (i.e., keep as a loop of spawns).
+    ST_DAC,  // Convert to divide-and-conquer.
+    ST_GPU,  // GPU loop next. 
     ST_END,
   };
 
@@ -157,6 +158,8 @@ public:
       return "Spawn iterations sequentially";
     case TapirLoopHints::ST_DAC:
       return "Use divide-and-conquer";
+    case TapirLoopHints::ST_GPU:
+      return "Use GPU lowering for loop nest.";
     case TapirLoopHints::ST_END:
       return "Unknown";
     }
