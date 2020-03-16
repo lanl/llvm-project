@@ -752,6 +752,19 @@ void CodeGenFunction::EmitScalarInit(const Expr *init, const ValueDecl *D,
       return;
     }
     llvm::Value *value = EmitScalarExpr(init);
+
+    if (const ReducerAttr *CA = D->getAttr<ReducerAttr>()) {
+        llvm::Value* combine = EmitLValue(CA->getCombine()).getPointer();
+        llvm::Value* init = EmitLValue(CA->getInit()).getPointer();
+        llvm::Value* destruct = EmitLValue(CA->getDestruct()).getPointer();
+        llvm::Type* types[] = {combine->getType(), init->getType(), destruct->getType()};
+        auto FT = llvm::FunctionType::get(combine->getType(), types, false);
+        //auto fn = CGM.CreateRuntimeFunction(FT, "__cilkrts_hyper_create");
+        auto fn = CGM.CreateRuntimeFunction(FT, "reducer_init");
+        Builder.CreateCall(fn, {combine, init, destruct});
+        return;
+    }
+
     if (capturedByInit)
       drillIntoBlockVariable(*this, lvalue, cast<VarDecl>(D));
     EmitNullabilityCheck(lvalue, value, init->getExprLoc());
@@ -1493,9 +1506,22 @@ CodeGenFunction::EmitAutoVarAlloca(const VarDecl &D) {
       // Create the alloca.  Note that we set the name separately from
       // building the instruction so that it's there even in no-asserts
       // builds.
+      llvm::AllocaInst* AI = nullptr;
       address = CreateTempAlloca(allocaTy, allocaAlignment, D.getName(),
                                  /*ArraySize=*/nullptr, &AllocaAddr);
 
+      assert(address.getPointer());
+      AI = llvm::cast<llvm::AllocaInst>(address.getPointer());
+      if (const ReducerAttr *CA = D.getAttr<ReducerAttr>()) {
+        llvm::Value* combine = EmitLValue(CA->getCombine()).getPointer();
+        llvm::Value* init = EmitLValue(CA->getInit()).getPointer();
+        llvm::Value* destruct = EmitLValue(CA->getDestruct()).getPointer();
+        AI->setReducer(true);
+        AI->setMetadata("reduce", llvm::MDTuple::get(combine->getContext(), {llvm::ValueAsMetadata::get(combine)}));
+        AI->setMetadata("identity", llvm::MDTuple::get(combine->getContext(), {llvm::ValueAsMetadata::get(init)}));
+        AI->setMetadata("destroy", llvm::MDTuple::get(combine->getContext(), {llvm::ValueAsMetadata::get(destruct)}));
+      }
+      
       // Don't emit lifetime markers for MSVC catch parameters. The lifetime of
       // the catch parameter starts in the catchpad instruction, and we can't
       // insert code in those basic blocks.

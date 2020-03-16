@@ -626,6 +626,15 @@ def AlignValue : Attr {
   let Documentation = [AlignValueDocs];
 }
 
+def Reducer : Attr {
+  let Spellings = [
+    GNU<"reducer">
+  ];
+  let Args = [ExprArgument<"combine">, ExprArgument<"init">, ExprArgument<"destruct">];
+  let Subjects = SubjectList<[Var, TypedefName]>;
+  let Documentation = [Undocumented];
+}
+
 def AlignMac68k : InheritableAttr {
   // This attribute has no spellings as it is only ever created implicitly.
   let Spellings = [];
