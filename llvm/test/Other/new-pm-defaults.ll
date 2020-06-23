@@ -287,7 +287,6 @@
 ; CHECK-O3-NEXT: Running pass: JumpThreadingPass
 ; CHECK-O3-NEXT: Running pass: CorrelatedValuePropagationPass
 ; CHECK-O3-NEXT: Running pass: InstCombinePass
->>>>>>> c37f41f... Bug fixes for LLVM 9 rebase
 ; CHECK-EP-VECTORIZER-START-NEXT: Running pass: NoOpFunctionPass
 ; CHECK-EXT: Running pass: {{.*}}::Bye on foo
 ; CHECK-O-NEXT: Running pass: FunctionToLoopPassAdaptor<{{.*}}LoopRotatePass

@@ -23,13 +23,13 @@ det.achd:                                         ; preds = %if.end
   reattach within %syncreg, label %det.cont
 
 det.cont:                                         ; preds = %det.achd, %if.end
-  %sub1 = add nsw i32 %n, -2
-  %call2 = tail call i32 @fib(i32 %sub1)
-  sync within %syncreg, label %sync.continue
 ; CHECK: det.cont:
 ; CHECK: [[DETCONTPHI:[0-9]+]] = MemoryPhi({if.end,{{[0-9]+}}},{det.achd,{{[0-9]+}}})
 ; CHECK: [[SYNCDEF:[0-9]+]] = MemoryDef([[DETCONTPHI]])
-; CHECK-NEXT: sync within %syncreg, label %sync.continue
+  %sub1 = add nsw i32 %n, -2
+  %call2 = tail call i32 @fib(i32 %sub1)
+  sync within %syncreg, label %sync.continue
+; CHECK: sync within %syncreg, label %sync.continue
 
 sync.continue:                                    ; preds = %det.cont
   %x.0.load10 = load i32, i32* %x, align 4
@@ -37,7 +37,6 @@ sync.continue:                                    ; preds = %det.cont
   call void @llvm.lifetime.end.p0i8(i64 4, i8* nonnull %x.0.x.0..sroa_cast)
   br label %cleanup
 ; CHECK: sync.continue:
-; CHECK: MemoryUse([[SYNCDEF]])
 ; CHECK-NEXT: %x.0.load10 = load i32, i32* %x, align 4
 
 cleanup:                                          ; preds = %entry, %sync.continue
