@@ -169,8 +169,6 @@ FunctionCallee QthreadsABI::get_qt_sinc_destroy() {
   return QtSincDestroy;
 }
 
-#define QTHREAD_FUNC(name) get_##name()
-
 QthreadsABI::QthreadsABI(Module &M) : TapirTarget(M) {
   LLVMContext &C = M.getContext();
   // Initialize any types we need for lowering.
@@ -190,7 +188,7 @@ Value *QthreadsABI::lowerGrainsizeCall(CallInst *GrainsizeCall) {
   IRBuilder<> Builder(GrainsizeCall);
 
   // Get 8 * workers
-  Value *Workers = Builder.CreateCall(QTHREAD_FUNC(qthread_num_workers));
+  Value *Workers = Builder.CreateCall(get_qthread_num_workers());
   Value *WorkersX8 = Builder.CreateIntCast(
       Builder.CreateMul(Workers, ConstantInt::get(Workers->getType(), 8)),
       Limit->getType(), false);
@@ -219,14 +217,14 @@ Value *QthreadsABI::getOrCreateSinc(Value *SyncRegion, Function *F) {
     Value* zero = ConstantInt::get(Type::getInt64Ty(C), 0);
     Value* null = Constant::getNullValue(Type::getInt8PtrTy(C));
     std::vector<Value*> createArgs = {zero, null, null, zero};
-    sinc = CallInst::Create(QTHREAD_FUNC(qt_sinc_create), createArgs, "",
+    sinc = CallInst::Create(get_qt_sinc_create(), createArgs, "",
                             F->getEntryBlock().getTerminator());
     SyncRegionToSinc[SyncRegion] = sinc;
 
     // Make sure we destroy the sinc at all exit points to prevent memory leaks
     for(BasicBlock &BB : *F) {
       if(isa<ReturnInst>(BB.getTerminator())){
-        CallInst::Create(QTHREAD_FUNC(qt_sinc_destroy), {sinc}, "",
+        CallInst::Create(get_qt_sinc_destroy(), {sinc}, "",
                          BB.getTerminator());
       }
     }
@@ -243,7 +241,7 @@ void QthreadsABI::lowerSync(SyncInst &SI) {
   Value* SR = SI.getSyncRegion(); 
   auto sinc = getOrCreateSinc(SR, F); 
   std::vector<Value *> args = {sinc, null}; 
-  auto sincwait = QTHREAD_FUNC(qt_sinc_wait); 
+  auto sincwait = get_qt_sinc_wait(); 
   builder.CreateCall(sincwait, args);
   BranchInst *PostSync = BranchInst::Create(SI.getSuccessor(0));
   ReplaceInstWithInst(&SI, PostSync);
@@ -276,7 +274,7 @@ void QthreadsABI::processSubTaskCall(TaskOutlineInfo &TOI, DominatorTree &DT) {
   ConstantInt *ArgSize = ConstantInt::get(DL.getIntPtrType(C),
                                           DL.getTypeAllocSize(ArgsTy));
   CallInst *Call = CallerIRBuilder.CreateCall(
-      QTHREAD_FUNC(qthread_fork_copyargs), { OutlinedFnPtr, ArgStructPtr,
+      get_qthread_fork_copyargs(), { OutlinedFnPtr, ArgStructPtr,
                                              ArgSize, Null });
   Call->setDebugLoc(ReplCall->getDebugLoc());
   TOI.replaceReplCall(Call);
@@ -312,7 +310,6 @@ void QthreadsABI::preProcessFunction(Function &F, TaskInfo &TI,
       continue;
     DetachInst *Detach = T->getDetach();
     BasicBlock *detB = Detach->getParent();
-    BasicBlock *Spawned = T->getEntry();
     Value *SR = Detach->getSyncRegion(); 
     Value *sinc = getOrCreateSinc(SR, &F);
 
@@ -320,19 +317,20 @@ void QthreadsABI::preProcessFunction(Function &F, TaskInfo &TI,
     IRBuilder<> preSpawnB(detB);
     Value* one = ConstantInt::get(Type::getInt64Ty(C), 1);
     std::vector<Value*> expectArgs = {sinc, one};
-    CallInst::Create(QTHREAD_FUNC(qt_sinc_expect), expectArgs, "", Detach);
+    CallInst::Create(get_qt_sinc_expect(), expectArgs, "", Detach);
 
     // Add a submit to end of task body
-    //
-    // TB: I would interpret the above comment to mean we want qt_sinc_submit()
-    // before the task terminates.  But the code I see for inserting
-    // qt_sinc_submit just inserts the call at the end of the entry block of the
-    // task, which is not necessarily the end of the task.  I kept the code I
-    // found, but I'm not sure if it is correct.
-    IRBuilder<> footerB(Spawned->getTerminator());
-    Value* null = Constant::getNullValue(Type::getInt8PtrTy(C));
-    std::vector<Value*> submitArgs = {sinc, null};
-    footerB.CreateCall(QTHREAD_FUNC(qt_sinc_submit), submitArgs);
+    for(Spindle *S : T->spindles()){
+      for(BasicBlock *B : S->blocks()){
+        if(T->isTaskExiting(B)){
+          IRBuilder<> footerB(B->getTerminator());
+          Value* SR = T->getDetach()->getSyncRegion();
+          auto sinc = getOrCreateSinc(SR, &F);
+          auto null = Constant::getNullValue(Type::getInt8PtrTy(C)); 
+          footerB.CreateCall(get_qt_sinc_submit(), {sinc, null}); 
+        }
+      }
+    }
   }
 }
 
@@ -341,7 +339,7 @@ void QthreadsABI::postProcessFunction(Function &F, bool OutliningTapirLoops) {
     // Don't do any preprocessing when outlining Tapir loops.
     return;
 
-  CallInst::Create(QTHREAD_FUNC(qthread_initialize), "",
+  CallInst::Create(get_qthread_initialize(), "",
                    F.getEntryBlock().getFirstNonPHIOrDbg());
 }
 
