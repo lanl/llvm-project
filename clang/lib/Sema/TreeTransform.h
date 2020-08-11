@@ -7978,13 +7978,13 @@ TreeTransform<Derived>::TransformCXXForallRangeStmt(CXXForallRangeStmt *S) {
   // Body has changed but we didn't rebuild the for-range statement. Rebuild
   // it now so we have a new statement to attach the body to.
   if (Body.get() != S->getBody() && NewStmt.get() == S) {
-    NewStmt = getDerived().RebuildCXXForRangeStmt(S->getForLoc(),
-                                                  S->getCoawaitLoc(), Init.get(),
-                                                  S->getColonLoc(), Range.get(),
-                                                  Begin.get(), End.get(),
-                                                  Cond.get(),
-                                                  Inc.get(), LoopVar.get(),
-                                                  S->getRParenLoc());
+    NewStmt = getDerived().RebuildCXXForallRangeStmt(S->getForLoc(),
+                                                     S->getCoawaitLoc(), Init.get(),
+                                                     S->getColonLoc(), Range.get(),
+                                                     Begin.get(), End.get(),
+                                                     Cond.get(),
+                                                     Inc.get(), LoopVar.get(),
+                                                     S->getRParenLoc());
     if (NewStmt.isInvalid())
       return StmtError();
   }
@@ -7992,7 +7992,7 @@ TreeTransform<Derived>::TransformCXXForallRangeStmt(CXXForallRangeStmt *S) {
   if (NewStmt.get() == S)
     return S;
 
-  return FinishCXXForRangeStmt(NewStmt.get(), Body.get());
+  return FinishCXXForallRangeStmt(NewStmt.get(), Body.get());
 }
 template<typename Derived>
 StmtResult
