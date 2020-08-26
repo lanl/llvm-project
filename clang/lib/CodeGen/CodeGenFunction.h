@@ -38,6 +38,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/ValueHandle.h"
+#include "llvm/IR/CFG.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Utils/SanitizerStats.h"
 #include "llvm/IR/ValueMap.h"

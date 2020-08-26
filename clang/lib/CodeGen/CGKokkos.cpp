@@ -49,9 +49,11 @@
  *  SUCH DAMAGE.
  *
  ***************************************************************************/
-#include <cstdio>
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/CodeGen/CGFunctionInfo.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/Pass.h"
+#include "llvm/IR/Dominators.h"
 #include "CodeGenFunction.h"
 
 using namespace clang;
@@ -160,7 +162,74 @@ namespace {
     }
   }
 
+  // helpful for debugging predcessor code details... 
+  static unsigned int numPredecessors(llvm::BasicBlock *BB) {
+    unsigned int count = 8; 
+    while(count > 0) {
+      if (BB->hasNPredecessorsOrMore(count))
+        break;
+      count--;
+    }
 
+    return count;
+  }
+
+  using BBlockSet = llvm::SmallPtrSet<llvm::BasicBlock*, 8>;
+
+  // Is the given basic block ('Target') "bound" between the given two
+  // basic blocks?  In more traditional (LLVM) terminiology the question 
+  // does the 'Dominant' BB dominate 'Target' dominate 
+  // dominate the other).  This is currently very centric to the 
+  // Tapir detach and reattach constructs around our code 
+  // generation transformations for Kokkos. 
+  // 
+  // Return 
+  static bool IsWithinDominanceRange(llvm::BasicBlock *BB,     // The block to begin the search from. 
+                                     llvm::BasicBlock *Detach, // Dominant BB. 
+                                     llvm::BasicBlock *Target, // The BB to search for. 
+                                     BBlockSet &Visited) {       // For avoiding cycles... 
+
+    assert(BB && "not expecting null basic block");
+    assert(Detach && "vaild, non-null, detach (basic) block must be provided.");
+    assert(Target && "valid, no-null, target (basic) block must be provided.");
+
+    // The ordering of our checks are important here.  Specifically, we 
+    // don't want to process the detach block so we use it for a termination 
+    // point (of the recursive walk). 
+    if (BB == Detach)
+      return false;  // BB was not found -- we've walked all the way to the detach. 
+
+    if (BB == Target)
+      return true;  // Found the block. 
+
+    // Check to see if we've visited BB.  If not, it will be inserted into 
+    // the visited set and we will then search the predecessors list for BB... 
+    if (Visited.insert(BB).second) {
+
+      bool found = false;
+      for(llvm::BasicBlock *P : predecessors(BB)) {
+        found = IsWithinDominanceRange(P, Detach, Target, Visited);
+        // A full walk can't terminate here unless we have successfully 
+        // found the Target block -- i.e., we must continue to walk the 
+        // full predecessor list for BB. 
+        if (found) 
+          return true; 
+      }
+      return false; // Target block not found... 
+    } else
+      return false; // We have already walked a previous path to BB -- stop search... 
+  }
+
+  // Convenenice interface to avoid creating and managing the visited set... 
+  static bool IsWithinDominanceRange(llvm::BasicBlock *BB,       // The block to begin the search from. 
+                                     llvm::BasicBlock *Detach,   // Dominant BB. 
+                                     llvm::BasicBlock *Target) { // The BB to search for. 
+
+    static BBlockSet Visited;
+    Visited.clear();
+    return IsWithinDominanceRange(BB, Detach, Target, Visited);
+  }
+  
 }
 
 // Sort through what sort of Kokkos construct we're looking at 
@@ -180,7 +249,7 @@ bool CodeGenFunction::EmitKokkosConstruct(const CallExpr *CE,
   } else {
     return false;
   }
-}  // hidden/local namespace 
+}
 
 
 const ParmVarDecl*
@@ -350,19 +419,7 @@ bool CodeGenFunction::EmitKokkosParallelFor(const CallExpr *CE,
     InKokkosConstruct = false;
   }
 
-  // Modify the body to use the ''detach''-local induction variable.
-  // At this point in the codegen, the body block has been emitted 
-  // and we can safely replace the ''sequential`` induction variable 
-  // within the detach basic block.
-  llvm::BasicBlock *CurrentBlock = Builder.GetInsertBlock();
-  for(llvm::Value::use_iterator UI = GInductionVar->use_begin(), UE = GInductionVar->use_end(); 
-      UI != UE; ) {
-    llvm::Use &U = *UI++;
-    llvm::Instruction *I = cast<llvm::Instruction>(U.getUser());
-    if (I->getParent() == CurrentBlock) 
-      U.set(TLInductionVar);
-  }
-
+  
   EmitBlock(Reattach.getBlock());
   Builder.CreateReattach(Increment, SRStart);
 
@@ -383,6 +440,23 @@ bool CodeGenFunction::EmitKokkosParallelFor(const CallExpr *CE,
   EmitBlock(Sync.getBlock());
   Builder.CreateSync(End, SRStart);
   EmitBlock(End, true);
+
+
+  // Modify the body to use the ''detach''-local induction variable.
+  // At this point in the codegen, the body block has been emitted 
+  // and we can safely replace the ''sequential`` induction variable 
+  // within the detach basic block.
+  int count = 0;
+  BBlockSet Visited;
+  for(llvm::Value::use_iterator UI = GInductionVar->use_begin(), UE = GInductionVar->use_end(); 
+      UI != UE; ) {
+    llvm::Use &U = *UI++;
+    llvm::Instruction *I = cast<llvm::Instruction>(U.getUser());
+    count++;
+    if (IsWithinDominanceRange(Reattach.getBlock(), Detach, I->getParent()))
+      U.set(TLInductionVar);
+  }
+
   return true;
 }
 
