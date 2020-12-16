@@ -68,7 +68,8 @@ LoopAttributes::LSStrategy CodeGenFunction::GetTapirStrategyAttr(
        ArrayRef<const Attr *> Attrs) {
 
 
-    LoopAttributes::LSStrategy Strategy = LoopAttributes::SEQ;
+//    LoopAttributes::LSStrategy Strategy = LoopAttributes::SEQ;
+  LoopAttributes::LSStrategy Strategy = LoopAttributes::DAC;
   
   auto curAttr = Attrs.begin();
 
@@ -127,6 +128,9 @@ LoopAttributes::LTarget CodeGenFunction::GetTapirRTTargetAttr(
         break;        
       case TapirRTTargetAttr::CudaRT:
         Target = LoopAttributes::CudaRT;
+        break;
+      case TapirRTTargetAttr::KitCudaRT:
+        Target = LoopAttributes::KitCudaRT;
         break;
       case TapirRTTargetAttr::HipRT:
         Target = LoopAttributes::HipRT;
@@ -240,7 +244,9 @@ void CodeGenFunction::EmitForallStmt(const ForallStmt &S,
   CurSyncRegion->setSyncRegionStart(SRStart);
 
   // TODO: Need to check attributes for spawning strategy. 
-  LoopStack.setSpawnStrategy(LoopAttributes::DAC);
+  //LoopStack.setSpawnStrategy(LoopAttributes::DAC);
+  LoopStack.setSpawnStrategy(GetTapirStrategyAttr(ForAttrs));
+
   // Start the loop with a block that tests the condition.
   // If there's an increment, the continue scope will be overwritten
   // later.
@@ -426,7 +432,8 @@ void CodeGenFunction::EmitCXXForallRangeStmt(const CXXForallRangeStmt &S,
 
   // FIXME: Need to get attributes for spawning strategy from
   // code versus this hard-coded route...
-  LoopStack.setSpawnStrategy(LoopAttributes::DAC);
+//  LoopStack.setSpawnStrategy(LoopAttributes::DAC);
+  LoopStack.setSpawnStrategy(GetTapirStrategyAttr(ForAttrs));
 
   EmitBlock(ConditionBlock);
 

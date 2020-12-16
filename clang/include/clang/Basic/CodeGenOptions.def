@@ -333,7 +333,7 @@ ENUM_CODEGENOPT(Inlining, InliningMethod, 2, NormalInlining)
 ENUM_CODEGENOPT(VecLib, VectorLibrary, 2, NoLibrary)
 
 /// Tapir target runtime library to use.
-ENUM_CODEGENOPT(TapirTarget, TapirTargetID, 9, TapirTargetID::Last_TapirTargetID)
+ENUM_CODEGENOPT(TapirTarget, TapirTargetID, 8, TapirTargetID::Last_TapirTargetID)
 
 /// The default TLS model to use.
 ENUM_CODEGENOPT(DefaultTLSModel, TLSModel, 2, GeneralDynamicTLSModel)

@@ -3544,7 +3544,7 @@ def TapirStrategy : StmtAttr {
   let Spellings = [CXX11<"tapir", "strategy">];
   let Args = [
       EnumArgument<"TapirStrategyType", "TapirStrategyTy",
-      ["dac", "seq", "gpu"],
+      ["dac", "serial", "gpu"],
       ["DAC", "SEQ", "GPU"], 0>
   ];
   // FIXME -- how do we document this?

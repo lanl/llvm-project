@@ -138,6 +138,13 @@ void __kitsune_cudart_initialize() {
 }
 
 extern "C"
+void __kitsune_cudart_malloc_float(float *dataPtr, int dataSize){
+  assert(dataPtr != nullptr && "null float data ptr");
+  assert(dataSize > 0 && "zero-sized float data");
+  
+}
+
+extern "C"
 void __kitsune_cudart_finalize() {
   assert(__cudart_initialized == true && "attempt at finalizing uninitialized runtime");
 

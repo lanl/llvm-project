@@ -67,6 +67,8 @@ private:
   FunctionCallee CudaPopCallConfig = nullptr;
   FunctionCallee CudaPushCallConfig = nullptr;
 
+  /// KitsuneCuda runtime calls
+
   GlobalVariable *GpuBinaryHandle = nullptr;
 
   FunctionType *getRegisterGlobalsFnTy() const;
