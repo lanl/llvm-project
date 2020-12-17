@@ -138,10 +138,13 @@ void __kitsune_cudart_initialize() {
 }
 
 extern "C"
-void __kitsune_cudart_malloc_float(float *dataPtr, int dataSize){
-  assert(dataPtr != nullptr && "null float data ptr");
-  assert(dataSize > 0 && "zero-sized float data");
-  
+void __kitsune_cudart_malloc_managed(void *dataPtr, int dataSize, int dataTypeSize){
+  assert(dataPtr != nullptr && "null data ptr");
+  assert(dataSize > 0 && "zero data size");
+  assert(dataTypeSize > 0 && "zero data type size");
+
+  int result = cudaMallocManaged((void**)&dataPtr, dataSize * dataTypeSize);
+  assert(result == 0 && "cudaMallocManaged not successful!");
 }
 
 extern "C"

@@ -33,6 +33,8 @@
 #include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Vectorize.h"
 
+#include <iostream>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "cudaabi"
@@ -872,6 +874,14 @@ CudaLoop::CudaLoop(Module &M) : PTXLoop(M) {
   CudaLaunchKernel = M.getOrInsertFunction(
       "cudaLaunchKernel", Int32Ty, VoidPtrTy, Int64Ty, Int32Ty, Int64Ty,
       Int32Ty, PointerType::getUnqual(VoidPtrTy), SizeTy, CudaStreamPtrTy);
+
+  /// KitsuneCuda Runtime Calls
+  Type *VoidTy = Type::getVoidTy(M.getContext());
+  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
+  KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cudart_initialize", VoidTy);
+  KitsuneCUDAMallocManaged = M.getOrInsertFunction(
+      "__kitsune_cudart_malloc_managed", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
+
 }
 
 void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
@@ -904,6 +914,49 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   PointerType *VoidPtrTy = Type::getInt8PtrTy(Ctx);
   PointerType *CudaStreamPtrTy = CudaStreamTy->getPointerTo();
 
+  ///------------------------------------------------------------
+  // Insert calls to KitsuneCUDAInit and KitsuneCUDAMallocManaged. 
+  IRBuilder<> KitsuneCB(Ctx);
+  BasicBlock *ParentEB = &Parent->front();
+  Instruction *FirstInst = ParentEB->getFirstNonPHI();
+
+  // Insert KitssuneCUDAInit and KitsuneCUDAMallocManaged 
+  // at the beginning of the first BB of host function.
+  KitsuneCB.SetInsertPoint(FirstInst->getNextNode());
+
+  KitsuneCB.CreateCall(KitsuneCUDAInit, {});
+
+  Value *DataPtr = nullptr;
+  Value *DataSize = nullptr;
+  Value *DataTypeSize = nullptr;
+  Function::arg_iterator I;
+  Function::arg_iterator E = Parent->arg_end();
+  Type *FloatPtrTy = Type::getFloatPtrTy(Ctx);
+
+  // Find the data size passed as an integer argument.
+  for (I = Parent->arg_begin(); I != E; I++){
+      if (I->getType()->getTypeID() == llvm::Type::IntegerTyID)
+          DataSize = I;
+  }
+
+  // For each pointer type argument, call KitsuneCUDAMallocManaged.
+  for (I = Parent->arg_begin(); I != E; I++){
+        Type *ArgTy = I->getType();
+        Type *ArgContainedTy = ArgTy->getContainedType(0);
+
+        if (ArgTy->getTypeID() == llvm::Type::PointerTyID){
+            DataTypeSize = ConstantInt::get(Int32Ty,
+                    ArgContainedTy->getPrimitiveSizeInBits()/8);
+
+            Value *AInst = KitsuneCB.CreateAlloca(ArgTy);
+            StoreInst *SInst = KitsuneCB.CreateStore(I, AInst);
+            Value* DataPtr = KitsuneCB.CreateBitCast(
+                    SInst->getOperand(1), VoidPtrTy);
+            CallInst *CInst = KitsuneCB.CreateCall(KitsuneCUDAMallocManaged,
+                 {DataPtr, DataSize, DataTypeSize});
+        }
+  }
+  ///-----------------------------------------------------------------
   // Split the basic block containing the detach replacement just before the
   // start of the detach-replacement instructions.
   BasicBlock *DetBlock = ReplStart->getParent();
