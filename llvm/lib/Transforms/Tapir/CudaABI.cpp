@@ -875,12 +875,26 @@ CudaLoop::CudaLoop(Module &M) : PTXLoop(M) {
       "cudaLaunchKernel", Int32Ty, VoidPtrTy, Int64Ty, Int32Ty, Int64Ty,
       Int32Ty, PointerType::getUnqual(VoidPtrTy), SizeTy, CudaStreamPtrTy);
 
-  /// KitsuneCuda Runtime Calls
+  ///---------------------------------------------------
+  //KitsuneCuda Runtime Calls
+  //PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
+  
   Type *VoidTy = Type::getVoidTy(M.getContext());
-  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
+
   KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cudart_initialize", VoidTy);
+
   KitsuneCUDAMallocManaged = M.getOrInsertFunction(
       "__kitsune_cudart_malloc_managed", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
+
+  KitsuneCUDAMemPrefetchAsync = M.getOrInsertFunction(
+      "__kitsune_cudart_mem_prefetch_async", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
+
+  KitsuneCUDADeviceSync = M.getOrInsertFunction(
+      "__kitsune_cudart_device_sync", VoidTy);
+
+  KitsuneCUDAFree = M.getOrInsertFunction(
+      "__kitsune_cudart_free", VoidTy, VoidPtrTy);
+  ///---------------------------------------------------
 
 }
 
@@ -915,7 +929,6 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   PointerType *CudaStreamPtrTy = CudaStreamTy->getPointerTo();
 
   ///------------------------------------------------------------
-  // Insert calls to KitsuneCUDAInit and KitsuneCUDAMallocManaged. 
   IRBuilder<> KitsuneCB(Ctx);
   BasicBlock *ParentEB = &Parent->front();
   Instruction *FirstInst = ParentEB->getFirstNonPHI();
@@ -926,37 +939,57 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
 
   KitsuneCB.CreateCall(KitsuneCUDAInit, {});
 
-  Value *DataPtr = nullptr;
   Value *DataSize = nullptr;
-  Value *DataTypeSize = nullptr;
   Function::arg_iterator I;
   Function::arg_iterator E = Parent->arg_end();
-  Type *FloatPtrTy = Type::getFloatPtrTy(Ctx);
+  typedef std::vector< std::tuple<Value*, Value*, Type*> > VVT_vec;
+  VVT_vec MallocedDataPtrInfo;
 
   // Find the data size passed as an integer argument.
   for (I = Parent->arg_begin(); I != E; I++){
       if (I->getType()->getTypeID() == llvm::Type::IntegerTyID)
           DataSize = I;
   }
-
+  
   // For each pointer type argument, call KitsuneCUDAMallocManaged.
   for (I = Parent->arg_begin(); I != E; I++){
         Type *ArgTy = I->getType();
         Type *ArgContainedTy = ArgTy->getContainedType(0);
 
         if (ArgTy->getTypeID() == llvm::Type::PointerTyID){
-            DataTypeSize = ConstantInt::get(Int32Ty,
+            Value* DataTypeSize = ConstantInt::get(Int32Ty,
                     ArgContainedTy->getPrimitiveSizeInBits()/8);
 
             Value *AInst = KitsuneCB.CreateAlloca(ArgTy);
+
+            Value *LTemp = KitsuneCB.CreateLoad(ArgTy, AInst);
+            I->replaceAllUsesWith(LTemp);
+
             StoreInst *SInst = KitsuneCB.CreateStore(I, AInst);
+
             Value* DataPtr = KitsuneCB.CreateBitCast(
                     SInst->getOperand(1), VoidPtrTy);
-            CallInst *CInst = KitsuneCB.CreateCall(KitsuneCUDAMallocManaged,
-                 {DataPtr, DataSize, DataTypeSize});
+
+            KitsuneCB.CreateCall(
+                    KitsuneCUDAMallocManaged,
+                    {DataPtr, DataSize, DataTypeSize});
+
+            // replace function calls that use this argument.
+            Value *LInst = KitsuneCB.CreateLoad(ArgTy, AInst);
+            LTemp->replaceAllUsesWith(LInst);
+
+            // Save Malloced DataPtr and related information
+            // for ucdaMemPrefetchAsync calls.
+            MallocedDataPtrInfo.push_back(
+                std::make_tuple(DataPtr, DataTypeSize, ArgTy));
+
         }
   }
-  ///-----------------------------------------------------------------
+  KitsuneCB.ClearInsertionPoint();
+
+  ///----------------------------------------------------------
+
+
   // Split the basic block containing the detach replacement just before the
   // start of the detach-replacement instructions.
   BasicBlock *DetBlock = ReplStart->getParent();
@@ -1113,6 +1146,22 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
       B.CreateUDiv(TripCount, ConstantInt::get(TripCount->getType(),
                                                ThreadsPerBlock)));
 
+  ///-----------------------------------------------------------------
+  // Insert calls to kitsune_mem_prefetch_async
+  //
+  for(auto it : MallocedDataPtrInfo) {
+    Value* DataPtr;
+    Value* DataTypeSize;
+    Type* ArgTy;
+
+    std::tie(DataPtr, DataTypeSize, ArgTy) = it;
+
+    Value* LInst = B.CreateLoad(ArgTy, DataPtr);
+    B.CreateCall(KitsuneCUDAMemPrefetchAsync, 
+        {LInst, DataSize, DataTypeSize});
+  }
+  ///-----------------------------------------------------------------
+
   // Instruction *ThenTerm, *ElseTerm;
   // SplitBlockAndInsertIfThenElse(BranchVal, CallBlock->getTerminator(),
   //                               &ThenTerm, &ElseTerm);
@@ -1172,14 +1221,22 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
                  /*blockDim*/  CoercedBlockVal, B.getInt32(1),
                  /*sharedMem*/ ConstantInt::get(SizeTy, 0),
                  /*stream*/    ConstantPointerNull::get(VoidPtrTy) });
+
   if (isa<InvokeInst>(ReplCall)) {
     InvokeInst *HelperCall = InvokeInst::Create(CudaLoopHelper, CallCont,
                                                 UnwindDest, SHInputVec);
     HelperCall->setDebugLoc(ReplCall->getDebugLoc());
     HelperCall->setCallingConv(CudaLoopHelper->getCallingConv());
     ReplaceInstWithInst(CallBlock->getTerminator(), HelperCall);
+    HelperCall->dump();
   } else {
     CallInst *HelperCall = B.CreateCall(CudaLoopHelper, SHInputVec);
+
+    ///---------------------------------------
+    // Insert calls to cudaDeviceSync.
+    B.CreateCall(KitsuneCUDADeviceSync, {});
+    ///---------------------------------------
+    
     HelperCall->setDebugLoc(ReplCall->getDebugLoc());
     HelperCall->setCallingConv(CudaLoopHelper->getCallingConv());
     HelperCall->setDoesNotThrow();
@@ -1188,8 +1245,39 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
                         BranchInst::Create(CallCont));
   }
 
+  ///----------------------------------------
+  // Insert CudaFree.
+  Function::iterator fn_itr; 
+  Function::iterator fn_itr_end = Parent->end();
+
+  for(fn_itr = Parent->begin(); fn_itr != fn_itr_end; ++fn_itr){
+      BasicBlock* bb = &*fn_itr;
+      BasicBlock::iterator bb_itr;
+      BasicBlock::iterator bb_itr_end = bb->end();
+
+      for(bb_itr = bb->begin(); bb_itr != bb_itr_end; ++bb_itr){
+          Instruction *ins = &*bb_itr;
+
+          if(ins->getOpcodeName() == "ret"){
+              KitsuneCB.SetInsertPoint(bb->getFirstNonPHI());                  
+              
+              for(auto it : MallocedDataPtrInfo) { 
+                  Value* DataPtr;
+                  Value* DataTypeSize;
+                  Type* ArgTy;
+                  std::tie(DataPtr, DataTypeSize, ArgTy) = it;
+                  
+                  Value* LInst = KitsuneCB.CreateLoad(ArgTy, DataPtr);
+                  KitsuneCB.CreateCall(KitsuneCUDAFree, LInst);
+              }
+          }
+      }
+  }
+  ///----------------------------------------
+
   // Replace the first argument of cudaLaunchKernel to point to the helper.
   CallInst *CallInHelper = cast<CallInst>(VMap[Call]);
+
   B.SetInsertPoint(CallInHelper);
   CallInHelper->setArgOperand(0, B.CreateBitCast(CudaLoopHelper, VoidPtrTy));
 

@@ -70,7 +70,9 @@ private:
   /// KitsuneCuda runtime calls
   FunctionCallee KitsuneCUDAInit = nullptr;
   FunctionCallee KitsuneCUDAMallocManaged = nullptr;
-
+  FunctionCallee KitsuneCUDAMemPrefetchAsync = nullptr;
+  FunctionCallee KitsuneCUDADeviceSync = nullptr;
+  FunctionCallee KitsuneCUDAFree = nullptr;
 
   GlobalVariable *GpuBinaryHandle = nullptr;
 
