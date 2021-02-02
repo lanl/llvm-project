@@ -877,14 +877,14 @@ CudaLoop::CudaLoop(Module &M) : PTXLoop(M) {
 
   ///---------------------------------------------------
   //KitsuneCuda Runtime Calls
-  //PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
+  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
   
   Type *VoidTy = Type::getVoidTy(M.getContext());
 
   KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cudart_initialize", VoidTy);
 
   KitsuneCUDAMallocManaged = M.getOrInsertFunction(
-      "__kitsune_cudart_malloc_managed", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
+      "__kitsune_cudart_malloc_managed", VoidTy, VoidPtrPtrTy, Int64Ty, Int32Ty);
 
   KitsuneCUDAMemPrefetchAsync = M.getOrInsertFunction(
       "__kitsune_cudart_mem_prefetch_async", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
@@ -926,6 +926,7 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   Type *Int64Ty = Type::getInt64Ty(Ctx);
   Type *SizeTy = DL.getIntPtrType(Ctx);
   PointerType *VoidPtrTy = Type::getInt8PtrTy(Ctx);
+  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
   PointerType *CudaStreamPtrTy = CudaStreamTy->getPointerTo();
 
   ///------------------------------------------------------------
@@ -968,7 +969,7 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
             StoreInst *SInst = KitsuneCB.CreateStore(I, AInst);
 
             Value* DataPtr = KitsuneCB.CreateBitCast(
-                    SInst->getOperand(1), VoidPtrTy);
+                    SInst->getOperand(1), VoidPtrPtrTy);
 
             KitsuneCB.CreateCall(
                     KitsuneCUDAMallocManaged,
