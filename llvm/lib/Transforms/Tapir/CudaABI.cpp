@@ -33,6 +33,8 @@
 #include "llvm/Transforms/Utils/TapirUtils.h"
 #include "llvm/Transforms/Vectorize.h"
 
+#include <iostream>
+
 using namespace llvm;
 
 #define DEBUG_TYPE "cudaabi"
@@ -850,129 +852,6 @@ void PTXLoop::postProcessOutline(TapirLoopInfo &TL, TaskOutlineInfo &Out,
   Annotations->addOperand(MDNode::get(Ctx, AV));
 }
 
-KitsuneCudaLoop::KitsuneCudaLoop(Module &M) : PTXLoop(M) {
-  Type *VoidTy = Type::getVoidTy(M.getContext());
-  Type *VoidPtrTy = Type::getInt8PtrTy(M.getContext());
-  Type *Int8Ty = Type::getInt8Ty(M.getContext());
-  Type *Int32Ty = Type::getInt32Ty(M.getContext());
-  Type *Int64Ty = Type::getInt64Ty(M.getContext());
-  KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cuda_init", VoidTy);
-  KitsuneGPUInitKernel = M.getOrInsertFunction("__kitsune_gpu_init_kernel",
-                                               VoidTy, Int32Ty, VoidPtrTy);
-  KitsuneGPUInitField = M.getOrInsertFunction("__kitsune_gpu_init_field",
-                                              VoidTy, Int32Ty, VoidPtrTy,
-                                              VoidPtrTy, Int32Ty, Int64Ty,
-                                              Int8Ty);
-  KitsuneGPUSetRunSize = M.getOrInsertFunction("__kitsune_gpu_set_run_size",
-                                               VoidTy, Int32Ty, Int64Ty,
-                                               Int64Ty, Int64Ty);
-  KitsuneGPURunKernel = M.getOrInsertFunction("__kitsune_gpu_run_kernel",
-                                              VoidTy, Int32Ty);
-  KitsuneGPUFinish = M.getOrInsertFunction("__kitsune_gpu_finish", VoidTy);
-
-}
-
-void KitsuneCudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL,
-                                              TaskOutlineInfo &TOI,
-                                              DominatorTree &DT) {
-  LLVMContext &Ctx = M.getContext();
-  Type *Int8Ty = Type::getInt8Ty(Ctx);
-  Type *Int32Ty = Type::getInt32Ty(Ctx);
-  Type *Int64Ty = Type::getInt64Ty(Ctx);
-  Type *VoidPtrTy = Type::getInt8PtrTy(Ctx);
-
-  Task *T = TL.getTask();
-  CallBase *ReplCall = cast<CallBase>(TOI.ReplCall);
-  Function *Parent = ReplCall->getFunction();
-  Value *RunStart = ReplCall->getArgOperand(getIVArgIndex(*Parent,
-                                                          TOI.InputSet));
-  Value *TripCount = ReplCall->getArgOperand(getLimitArgIndex(*Parent,
-                                                              TOI.InputSet));
-  IRBuilder<> B(ReplCall);
-
-  Value *KernelID = ConstantInt::get(Int32Ty, MyKernelID);
-  Value *PTXStr = B.CreateBitCast(PTXGlobal, VoidPtrTy);
-
-  B.CreateCall(KitsuneCUDAInit, {});
-  B.CreateCall(KitsuneGPUInitKernel, { KernelID, PTXStr });
-
-  for (Value *V : TOI.InputSet) {
-    Value *ElementSize = nullptr;
-    Value *VPtr;
-    Value *FieldName;
-    Value *Size = nullptr;
-
-    // TODO: fix
-    // this is a temporary hack to get the size of the field
-    // it will currently only work for a limited case
-
-    if (BitCastInst *BC = dyn_cast<BitCastInst>(V)) {
-      CallInst *CI = dyn_cast<CallInst>(BC->getOperand(0));
-      assert(CI && "Unable to detect field size");
-
-      Value *Bytes = CI->getOperand(0);
-      assert(Bytes->getType()->isIntegerTy(64));
-
-      PointerType *PT = dyn_cast<PointerType>(V->getType());
-      IntegerType *IntT = dyn_cast<IntegerType>(PT->getElementType());
-      assert(IntT && "Expected integer type");
-
-      Constant *Fn = ConstantDataArray::getString(Ctx, CI->getName());
-      GlobalVariable *FieldNameGlobal =
-          new GlobalVariable(M, Fn->getType(), true,
-                             GlobalValue::PrivateLinkage, Fn, "field.name");
-      FieldName = B.CreateBitCast(FieldNameGlobal, VoidPtrTy);
-      VPtr = B.CreateBitCast(V, VoidPtrTy);
-      ElementSize = ConstantInt::get(Int32Ty, IntT->getBitWidth()/8);
-      Size = B.CreateUDiv(Bytes, ConstantInt::get(Int64Ty,
-                                                  IntT->getBitWidth()/8));
-    } else if (AllocaInst *AI = dyn_cast<AllocaInst>(V)) {
-      Constant *Fn = ConstantDataArray::getString(Ctx, AI->getName());
-      GlobalVariable *FieldNameGlobal =
-          new GlobalVariable(M, Fn->getType(), true,
-                             GlobalValue::PrivateLinkage, Fn, "field.name");
-      FieldName = B.CreateBitCast(FieldNameGlobal, VoidPtrTy);
-      VPtr = B.CreateBitCast(V, VoidPtrTy);
-      ArrayType *AT = dyn_cast<ArrayType>(AI->getAllocatedType());
-      assert(AT && "Expected array type");
-      ElementSize =
-          ConstantInt::get(Int32Ty,
-                           AT->getElementType()->getPrimitiveSizeInBits()/8);
-      Size = ConstantInt::get(Int64Ty, AT->getNumElements());
-    }
-
-    unsigned m = 0;
-    for (const User *U : V->users()) {
-      if (const Instruction *I = dyn_cast<Instruction>(U)) {
-        // TODO: Properly restrict this check to users within the cloned loop
-        // body.  Checking the dominator tree doesn't properly check
-        // exception-handling code, although it's not clear we should see such
-        // code in these loops.
-        if (!DT.dominates(T->getEntry(), I->getParent()))
-          continue;
-
-        if (isa<LoadInst>(U))
-          m |= 1;
-        else if (isa<StoreInst>(U))
-          m |= 2;
-      }
-    }
-    Value *Mode = ConstantInt::get(Int8Ty, m);
-    if (ElementSize && Size)
-      B.CreateCall(KitsuneGPUInitField, { KernelID, FieldName, VPtr,
-                                          ElementSize, Size, Mode });
-  }
-
-  Value *RunSize = B.CreateSub(TripCount, ConstantInt::get(TripCount->getType(),
-                                                           1));
-  B.CreateCall(KitsuneGPUSetRunSize, { KernelID, RunSize, RunStart, RunStart });
-
-  B.CreateCall(KitsuneGPURunKernel, { KernelID });
-
-  B.CreateCall(KitsuneGPUFinish, {});
-
-  ReplCall->eraseFromParent();
-}
 
 CudaLoop::CudaLoop(Module &M) : PTXLoop(M) {
   LLVMContext &Ctx = M.getContext();
@@ -995,6 +874,28 @@ CudaLoop::CudaLoop(Module &M) : PTXLoop(M) {
   CudaLaunchKernel = M.getOrInsertFunction(
       "cudaLaunchKernel", Int32Ty, VoidPtrTy, Int64Ty, Int32Ty, Int64Ty,
       Int32Ty, PointerType::getUnqual(VoidPtrTy), SizeTy, CudaStreamPtrTy);
+
+  ///---------------------------------------------------
+  //KitsuneCuda Runtime Calls
+  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
+  
+  Type *VoidTy = Type::getVoidTy(M.getContext());
+
+  KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cudart_initialize", VoidTy);
+
+  KitsuneCUDAMallocManaged = M.getOrInsertFunction(
+      "__kitsune_cudart_malloc_managed", VoidTy, VoidPtrPtrTy, Int64Ty, Int32Ty);
+
+  KitsuneCUDAMemPrefetchAsync = M.getOrInsertFunction(
+      "__kitsune_cudart_mem_prefetch_async", VoidTy, VoidPtrTy, Int64Ty, Int32Ty);
+
+  KitsuneCUDADeviceSync = M.getOrInsertFunction(
+      "__kitsune_cudart_device_sync", VoidTy);
+
+  KitsuneCUDAFree = M.getOrInsertFunction(
+      "__kitsune_cudart_free", VoidTy, VoidPtrTy);
+  ///---------------------------------------------------
+
 }
 
 void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
@@ -1025,7 +926,70 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   Type *Int64Ty = Type::getInt64Ty(Ctx);
   Type *SizeTy = DL.getIntPtrType(Ctx);
   PointerType *VoidPtrTy = Type::getInt8PtrTy(Ctx);
+  PointerType *VoidPtrPtrTy = VoidPtrTy->getPointerTo();
   PointerType *CudaStreamPtrTy = CudaStreamTy->getPointerTo();
+
+  ///------------------------------------------------------------
+  IRBuilder<> KitsuneCB(Ctx);
+  BasicBlock *ParentEB = &Parent->front();
+  Instruction *FirstInst = ParentEB->getFirstNonPHI();
+
+  // Insert KitssuneCUDAInit and KitsuneCUDAMallocManaged 
+  // at the beginning of the first BB of host function.
+  KitsuneCB.SetInsertPoint(FirstInst->getNextNode());
+
+  KitsuneCB.CreateCall(KitsuneCUDAInit, {});
+
+  Value *DataSize = nullptr;
+  Function::arg_iterator I;
+  Function::arg_iterator E = Parent->arg_end();
+  typedef std::vector< std::tuple<Value*, Value*, Type*> > VVT_vec;
+  VVT_vec MallocedDataPtrInfo;
+
+  // Find the data size passed as an integer argument.
+  for (I = Parent->arg_begin(); I != E; I++){
+      if (I->getType()->getTypeID() == llvm::Type::IntegerTyID)
+          DataSize = I;
+  }
+  
+  // For each pointer type argument, call KitsuneCUDAMallocManaged.
+  for (I = Parent->arg_begin(); I != E; I++){
+        Type *ArgTy = I->getType();
+        Type *ArgContainedTy = ArgTy->getContainedType(0);
+
+        if (ArgTy->getTypeID() == llvm::Type::PointerTyID){
+            Value* DataTypeSize = ConstantInt::get(Int32Ty,
+                    ArgContainedTy->getPrimitiveSizeInBits()/8);
+
+            Value *AInst = KitsuneCB.CreateAlloca(ArgTy);
+
+            Value *LTemp = KitsuneCB.CreateLoad(ArgTy, AInst);
+            I->replaceAllUsesWith(LTemp);
+
+            StoreInst *SInst = KitsuneCB.CreateStore(I, AInst);
+
+            Value* DataPtr = KitsuneCB.CreateBitCast(
+                    SInst->getOperand(1), VoidPtrPtrTy);
+
+            KitsuneCB.CreateCall(
+                    KitsuneCUDAMallocManaged,
+                    {DataPtr, DataSize, DataTypeSize});
+
+            // replace function calls that use this argument.
+            Value *LInst = KitsuneCB.CreateLoad(ArgTy, AInst);
+            LTemp->replaceAllUsesWith(LInst);
+
+            // Save Malloced DataPtr and related information
+            // for ucdaMemPrefetchAsync calls.
+            MallocedDataPtrInfo.push_back(
+                std::make_tuple(DataPtr, DataTypeSize, ArgTy));
+
+        }
+  }
+  KitsuneCB.ClearInsertionPoint();
+
+  ///----------------------------------------------------------
+
 
   // Split the basic block containing the detach replacement just before the
   // start of the detach-replacement instructions.
@@ -1183,6 +1147,22 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
       B.CreateUDiv(TripCount, ConstantInt::get(TripCount->getType(),
                                                ThreadsPerBlock)));
 
+  ///-----------------------------------------------------------------
+  // Insert calls to kitsune_mem_prefetch_async
+  //
+  for(auto it : MallocedDataPtrInfo) {
+    Value* DataPtr;
+    Value* DataTypeSize;
+    Type* ArgTy;
+
+    std::tie(DataPtr, DataTypeSize, ArgTy) = it;
+
+    Value* LInst = B.CreateLoad(ArgTy, DataPtr);
+    B.CreateCall(KitsuneCUDAMemPrefetchAsync, 
+        {LInst, DataSize, DataTypeSize});
+  }
+  ///-----------------------------------------------------------------
+
   // Instruction *ThenTerm, *ElseTerm;
   // SplitBlockAndInsertIfThenElse(BranchVal, CallBlock->getTerminator(),
   //                               &ThenTerm, &ElseTerm);
@@ -1242,14 +1222,22 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
                  /*blockDim*/  CoercedBlockVal, B.getInt32(1),
                  /*sharedMem*/ ConstantInt::get(SizeTy, 0),
                  /*stream*/    ConstantPointerNull::get(VoidPtrTy) });
+
   if (isa<InvokeInst>(ReplCall)) {
     InvokeInst *HelperCall = InvokeInst::Create(CudaLoopHelper, CallCont,
                                                 UnwindDest, SHInputVec);
     HelperCall->setDebugLoc(ReplCall->getDebugLoc());
     HelperCall->setCallingConv(CudaLoopHelper->getCallingConv());
     ReplaceInstWithInst(CallBlock->getTerminator(), HelperCall);
+    HelperCall->dump();
   } else {
     CallInst *HelperCall = B.CreateCall(CudaLoopHelper, SHInputVec);
+
+    ///---------------------------------------
+    // Insert calls to cudaDeviceSync.
+    B.CreateCall(KitsuneCUDADeviceSync, {});
+    ///---------------------------------------
+    
     HelperCall->setDebugLoc(ReplCall->getDebugLoc());
     HelperCall->setCallingConv(CudaLoopHelper->getCallingConv());
     HelperCall->setDoesNotThrow();
@@ -1258,8 +1246,39 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
                         BranchInst::Create(CallCont));
   }
 
+  ///----------------------------------------
+  // Insert CudaFree.
+  Function::iterator fn_itr; 
+  Function::iterator fn_itr_end = Parent->end();
+
+  for(fn_itr = Parent->begin(); fn_itr != fn_itr_end; ++fn_itr){
+      BasicBlock* bb = &*fn_itr;
+      BasicBlock::iterator bb_itr;
+      BasicBlock::iterator bb_itr_end = bb->end();
+
+      for(bb_itr = bb->begin(); bb_itr != bb_itr_end; ++bb_itr){
+          Instruction *ins = &*bb_itr;
+
+          if(ins->getOpcodeName() == "ret"){
+              KitsuneCB.SetInsertPoint(bb->getFirstNonPHI());                  
+              
+              for(auto it : MallocedDataPtrInfo) { 
+                  Value* DataPtr;
+                  Value* DataTypeSize;
+                  Type* ArgTy;
+                  std::tie(DataPtr, DataTypeSize, ArgTy) = it;
+                  
+                  Value* LInst = KitsuneCB.CreateLoad(ArgTy, DataPtr);
+                  KitsuneCB.CreateCall(KitsuneCUDAFree, LInst);
+              }
+          }
+      }
+  }
+  ///----------------------------------------
+
   // Replace the first argument of cudaLaunchKernel to point to the helper.
   CallInst *CallInHelper = cast<CallInst>(VMap[Call]);
+
   B.SetInsertPoint(CallInHelper);
   CallInHelper->setArgOperand(0, B.CreateBitCast(CudaLoopHelper, VoidPtrTy));
 
@@ -1270,3 +1289,128 @@ void CudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
   cast<Instruction>(VMap[ReplCall])->eraseFromParent();
   ReplCall->eraseFromParent();
 }
+
+
+//KitsuneCudaLoop::KitsuneCudaLoop(Module &M) : PTXLoop(M) {
+//  Type *VoidTy = Type::getVoidTy(M.getContext());
+//  Type *VoidPtrTy = Type::getInt8PtrTy(M.getContext());
+//  Type *Int8Ty = Type::getInt8Ty(M.getContext());
+//  Type *Int32Ty = Type::getInt32Ty(M.getContext());
+//  Type *Int64Ty = Type::getInt64Ty(M.getContext());
+//  KitsuneCUDAInit = M.getOrInsertFunction("__kitsune_cuda_init", VoidTy);
+//  KitsuneGPUInitKernel = M.getOrInsertFunction("__kitsune_gpu_init_kernel",
+//                                               VoidTy, Int32Ty, VoidPtrTy);
+//  KitsuneGPUInitField = M.getOrInsertFunction("__kitsune_gpu_init_field",
+//                                              VoidTy, Int32Ty, VoidPtrTy,
+//                                              VoidPtrTy, Int32Ty, Int64Ty,
+//                                              Int8Ty);
+//  KitsuneGPUSetRunSize = M.getOrInsertFunction("__kitsune_gpu_set_run_size",
+//                                               VoidTy, Int32Ty, Int64Ty,
+//                                               Int64Ty, Int64Ty);
+//  KitsuneGPURunKernel = M.getOrInsertFunction("__kitsune_gpu_run_kernel",
+//                                              VoidTy, Int32Ty);
+//  KitsuneGPUFinish = M.getOrInsertFunction("__kitsune_gpu_finish", VoidTy);
+//
+//}
+//
+//void KitsuneCudaLoop::processOutlinedLoopCall(TapirLoopInfo &TL,
+//                                              TaskOutlineInfo &TOI,
+//                                              DominatorTree &DT) {
+//  LLVMContext &Ctx = M.getContext();
+//  Type *Int8Ty = Type::getInt8Ty(Ctx);
+//  Type *Int32Ty = Type::getInt32Ty(Ctx);
+//  Type *Int64Ty = Type::getInt64Ty(Ctx);
+//  Type *VoidPtrTy = Type::getInt8PtrTy(Ctx);
+//
+//  Task *T = TL.getTask();
+//  CallBase *ReplCall = cast<CallBase>(TOI.ReplCall);
+//  Function *Parent = ReplCall->getFunction();
+//  Value *RunStart = ReplCall->getArgOperand(getIVArgIndex(*Parent,
+//                                                          TOI.InputSet));
+//  Value *TripCount = ReplCall->getArgOperand(getLimitArgIndex(*Parent,
+//                                                              TOI.InputSet));
+//  IRBuilder<> B(ReplCall);
+//
+//  Value *KernelID = ConstantInt::get(Int32Ty, MyKernelID);
+//  Value *PTXStr = B.CreateBitCast(PTXGlobal, VoidPtrTy);
+//
+//  B.CreateCall(KitsuneCUDAInit, {});
+//  B.CreateCall(KitsuneGPUInitKernel, { KernelID, PTXStr });
+//
+//  for (Value *V : TOI.InputSet) {
+//    Value *ElementSize = nullptr;
+//    Value *VPtr;
+//    Value *FieldName;
+//    Value *Size = nullptr;
+//
+//    // TODO: fix
+//    // this is a temporary hack to get the size of the field
+//    // it will currently only work for a limited case
+//
+//    if (BitCastInst *BC = dyn_cast<BitCastInst>(V)) {
+//      CallInst *CI = dyn_cast<CallInst>(BC->getOperand(0));
+//      assert(CI && "Unable to detect field size");
+//
+//      Value *Bytes = CI->getOperand(0);
+//      assert(Bytes->getType()->isIntegerTy(64));
+//
+//      PointerType *PT = dyn_cast<PointerType>(V->getType());
+//      IntegerType *IntT = dyn_cast<IntegerType>(PT->getElementType());
+//      assert(IntT && "Expected integer type");
+//
+//      Constant *Fn = ConstantDataArray::getString(Ctx, CI->getName());
+//      GlobalVariable *FieldNameGlobal =
+//          new GlobalVariable(M, Fn->getType(), true,
+//                             GlobalValue::PrivateLinkage, Fn, "field.name");
+//      FieldName = B.CreateBitCast(FieldNameGlobal, VoidPtrTy);
+//      VPtr = B.CreateBitCast(V, VoidPtrTy);
+//      ElementSize = ConstantInt::get(Int32Ty, IntT->getBitWidth()/8);
+//      Size = B.CreateUDiv(Bytes, ConstantInt::get(Int64Ty,
+//                                                  IntT->getBitWidth()/8));
+//    } else if (AllocaInst *AI = dyn_cast<AllocaInst>(V)) {
+//      Constant *Fn = ConstantDataArray::getString(Ctx, AI->getName());
+//      GlobalVariable *FieldNameGlobal =
+//          new GlobalVariable(M, Fn->getType(), true,
+//                             GlobalValue::PrivateLinkage, Fn, "field.name");
+//      FieldName = B.CreateBitCast(FieldNameGlobal, VoidPtrTy);
+//      VPtr = B.CreateBitCast(V, VoidPtrTy);
+//      ArrayType *AT = dyn_cast<ArrayType>(AI->getAllocatedType());
+//      assert(AT && "Expected array type");
+//      ElementSize =
+//          ConstantInt::get(Int32Ty,
+//                           AT->getElementType()->getPrimitiveSizeInBits()/8);
+//      Size = ConstantInt::get(Int64Ty, AT->getNumElements());
+//    }
+//
+//    unsigned m = 0;
+//    for (const User *U : V->users()) {
+//      if (const Instruction *I = dyn_cast<Instruction>(U)) {
+//        // TODO: Properly restrict this check to users within the cloned loop
+//        // body.  Checking the dominator tree doesn't properly check
+//        // exception-handling code, although it's not clear we should see such
+//        // code in these loops.
+//        if (!DT.dominates(T->getEntry(), I->getParent()))
+//          continue;
+//
+//        if (isa<LoadInst>(U))
+//          m |= 1;
+//        else if (isa<StoreInst>(U))
+//          m |= 2;
+//      }
+//    }
+//    Value *Mode = ConstantInt::get(Int8Ty, m);
+//    if (ElementSize && Size)
+//      B.CreateCall(KitsuneGPUInitField, { KernelID, FieldName, VPtr,
+//                                          ElementSize, Size, Mode });
+//  }
+//
+//  Value *RunSize = B.CreateSub(TripCount, ConstantInt::get(TripCount->getType(),
+//                                                           1));
+//  B.CreateCall(KitsuneGPUSetRunSize, { KernelID, RunSize, RunStart, RunStart });
+//
+//  B.CreateCall(KitsuneGPURunKernel, { KernelID });
+//
+//  B.CreateCall(KitsuneGPUFinish, {});
+//
+//  ReplCall->eraseFromParent();
+//}

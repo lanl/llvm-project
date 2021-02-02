@@ -116,6 +116,10 @@ void __kitsune_check_env_vars() {
     __cudart_verbose_rt = true;
 }
 
+///----------------------------------------------
+// CudaMallocManaged and related calls.
+
+// initialize CUDA runtime.
 extern "C"
 void __kitsune_cudart_initialize() {
 
@@ -136,6 +140,48 @@ void __kitsune_cudart_initialize() {
   if (DeviceCount > 0)
     __cudart_initialized = true;
 }
+
+// cudaMallocManaged
+extern "C"
+void __kitsune_cudart_malloc_managed(void *dataPtr, int dataSize, int dataTypeSize){
+  assert(dataPtr != nullptr && "null data ptr");
+  assert(dataSize > 0 && "zero data size");
+  assert(dataTypeSize > 0 && "zero data type size");
+
+  int result = cudaMallocManaged((void**)&dataPtr, dataSize * dataTypeSize);
+  assert(result == 0 && "cudaMallocManaged not successful!");
+}
+
+// cudaMemPrefetchAsync
+extern "C"
+void __kitsune_cudart_mem_prefetch_async(void *dataPtr, int dataSize, int dataTypeSize){
+  assert(dataPtr != nullptr && "null data ptr");
+  assert(dataSize > 0 && "zero data size");
+  assert(dataTypeSize > 0 && "zero data type size");
+  assert(__kitsune_cudart_ndevices() > 0 && "number of devices is 0");
+
+  int devId = 0;
+  int result = cudaMemPrefetchAsync(dataPtr, dataSize * dataTypeSize, devId);
+  assert(result == 0 && "cudaMemPrefetchAsync was not successful!");
+  
+}
+
+// cudaDeviceSynchronize
+extern "C"
+void __kitsune_cudart_device_sync() {
+  int result = cudaDeviceSynchronize();
+  assert(result == 0 && "cudaDeviceSynchronize was not successful!");
+}
+
+// cudaFree
+extern "C"
+void __kitsune_cudart_free(void *dataPtr){
+  assert(dataPtr != nullptr && "null data ptr");
+
+  int result = cudaFree(dataPtr);
+  assert(result == 0 && "cudaFree was not successful!");
+}
+///------------------------------------------------
 
 extern "C"
 void __kitsune_cudart_finalize() {

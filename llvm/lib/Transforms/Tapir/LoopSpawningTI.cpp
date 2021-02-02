@@ -418,6 +418,9 @@ public:
     TapirLoops.clear();
     TaskToTapirLoop.clear();
     LoopToTapirLoop.clear();
+    // Delete any loop outline processors we're managing.
+        for (LoopOutlineProcessor *ManagedLOP : ManagedOutlineProcessors)
+            delete ManagedLOP;
   }
 
   bool run();
@@ -466,8 +469,8 @@ private:
   // Get the LoopOutlineProcessor for handling Tapir loop \p TL.
   LoopOutlineProcessor *getOutlineProcessor(TapirLoopInfo *TL);
 
-  using LOPMapTy = DenseMap<TapirLoopInfo *,
-                            std::unique_ptr<LoopOutlineProcessor>>;
+  using LOPMapTy = DenseMap<TapirLoopInfo *, LoopOutlineProcessor *>;
+//                            std::unique_ptr<LoopOutlineProcessor>>;
 
   // For all recorded Tapir loops, determine the function arguments and inputs
   // for the outlined helper functions for those loops.
@@ -531,6 +534,7 @@ private:
   DenseMap<Task *, TapirLoopInfo *> TaskToTapirLoop;
   DenseMap<Loop *, TapirLoopInfo *> LoopToTapirLoop;
   LOPMapTy OutlineProcessors;
+  SmallVector<LoopOutlineProcessor *, 16> ManagedOutlineProcessors;
 };
 } // end anonymous namespace
 
@@ -869,10 +873,19 @@ LoopOutlineProcessor *LoopSpawningImpl::getOutlineProcessor(TapirLoopInfo *TL) {
   Loop *L = TL->getLoop();
   TapirLoopHints Hints(L);
 
+  LoopOutlineProcessor *ManagedLOP;
   switch (Hints.getStrategy()) {
-  case TapirLoopHints::ST_DAC: return new DACSpawning(M);
-  default: return new DefaultLoopOutlineProcessor(M);
+//  case TapirLoopHints::ST_DAC: return new DACSpawning(M);
+//  default: return new DefaultLoopOutlineProcessor(M);
+    case TapirLoopHints::ST_DAC:
+        ManagedLOP = new DACSpawning(M);
+        break;
+    default:
+        ManagedLOP = new DefaultLoopOutlineProcessor(M);
+        break;
   }
+  ManagedOutlineProcessors.push_back(ManagedLOP);
+  return ManagedLOP;
 }
 
 /// Associate tasks with Tapir loops that enclose them.
@@ -1178,13 +1191,14 @@ namespace {
 // ValueMaterializer to manage remapping uses of the tripcount in the helper
 // function for the loop, when the only uses of tripcount occur in the condition
 // for the loop backedge and, possibly, in metadata.
-class ArgEndMaterializer final : public ValueMaterializer {
+//class ArgEndMaterializer final : public ValueMaterializer {
+class ArgEndMaterializer final : public OutlineMaterializer {
 private:
-  Value *TripCount;
-  Value *ArgEnd;
+  Value *TripCount = nullptr;
+  Value *ArgEnd = nullptr;
 public:
-  ArgEndMaterializer(Value *TripCount, Value *ArgEnd)
-      : TripCount(TripCount), ArgEnd(ArgEnd) {}
+  ArgEndMaterializer(Value *TripCount, Value *ArgEnd, Module *DstM)
+      : OutlineMaterializer(DstM), TripCount(TripCount), ArgEnd(ArgEnd) {}
 
   Value *materialize(Value *V) final {
     // If we're materializing metadata for TripCount, materialize empty metadata
@@ -1203,7 +1217,8 @@ public:
       return ArgEnd;
 
     // Otherwise go with the default behavior.
-    return nullptr;
+//    return nullptr;
+    return OutlineMaterializer::materialize(V);
   }
 };
 }
@@ -1239,12 +1254,17 @@ Function *LoopSpawningImpl::createHelperForTapirLoop(
   const Instruction *InputSyncRegion =
       dyn_cast<Instruction>(DI->getSyncRegion());
 
-  ArgEndMaterializer *Mat = nullptr;
+//  ArgEndMaterializer *Mat = nullptr;
+  OutlineMaterializer *Mat = nullptr;
   // If the trip count is variable and we're not otherwise passing the trip
   // count as an argument, temporarily map the trip count to the end argument.
   if (!isa<Constant>(TL->getTripCount()) && !Args.count(TL->getTripCount())) {
     // Create an ArgEndMaterializer to handle uses of TL->getTripCount().
-    Mat = new ArgEndMaterializer(TL->getTripCount(), Args[LimitArgIndex]);
+//    Mat = new ArgEndMaterializer(TL->getTripCount(), Args[LimitArgIndex]);
+    Mat = new ArgEndMaterializer(TL->getTripCount(), Args[LimitArgIndex],
+                                (F.getParent() != DestM ? DestM : nullptr));
+  } else if (F.getParent() != DestM){
+      Mat = new OutlineMaterializer(DestM);
   }
 
   Twine NameSuffix = ".ls" + Twine(TL->getLoop()->getLoopDepth());
@@ -1393,8 +1413,8 @@ TaskOutlineMapTy LoopSpawningImpl::outlineAllTapirLoops() {
       }
 
       // Get an outline processor for each Tapir loop.
-      OutlineProcessors[TL] =
-        std::unique_ptr<LoopOutlineProcessor>(getOutlineProcessor(TL));
+      OutlineProcessors[TL] = getOutlineProcessor(TL);
+//        std::unique_ptr<LoopOutlineProcessor>(getOutlineProcessor(TL));
     }
   }
 
@@ -1574,15 +1594,18 @@ bool LoopSpawningImpl::run() {
   // Perform any Target-dependent postprocessing of F.
   Target->postProcessFunction(F, true);
 
-  LLVM_DEBUG({
-    NamedRegionTimer NRT("verify", "Post-loop-spawning verification",
-                         TimerGroupName, TimerGroupDescription,
-                         TimePassesIsEnabled);
-    if (verifyModule(*F.getParent(), &errs())) {
+//  LLVM_DEBUG({
+//    NamedRegionTimer NRT("verify", "Post-loop-spawning verification",
+//                         TimerGroupName, TimerGroupDescription,
+//                         TimePassesIsEnabled);
+//    if (verifyModule(*F.getParent(), &errs())) {
+#ifndef NDEBUG
+  if (verifyModule(*F.getParent(), &errss())) {
       LLVM_DEBUG(dbgs() << "Module after loop spawning:" << *F.getParent());
       llvm_unreachable("Loop spawning produced bad IR!");
     }
-  });
+#endif
+//  });
 
   return true;
 }

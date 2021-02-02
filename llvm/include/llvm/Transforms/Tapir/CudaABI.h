@@ -67,6 +67,13 @@ private:
   FunctionCallee CudaPopCallConfig = nullptr;
   FunctionCallee CudaPushCallConfig = nullptr;
 
+  /// KitsuneCuda runtime calls
+  FunctionCallee KitsuneCUDAInit = nullptr;
+  FunctionCallee KitsuneCUDAMallocManaged = nullptr;
+  FunctionCallee KitsuneCUDAMemPrefetchAsync = nullptr;
+  FunctionCallee KitsuneCUDADeviceSync = nullptr;
+  FunctionCallee KitsuneCUDAFree = nullptr;
+
   GlobalVariable *GpuBinaryHandle = nullptr;
 
   FunctionType *getRegisterGlobalsFnTy() const;
@@ -90,20 +97,20 @@ public:
                                DominatorTree &DT) override final;
 };
 
-class KitsuneCudaLoop : public PTXLoop {
-private:
-  FunctionCallee KitsuneCUDAInit = nullptr;
-  FunctionCallee KitsuneGPUInitKernel = nullptr;
-  FunctionCallee KitsuneGPUInitField = nullptr;
-  FunctionCallee KitsuneGPUSetRunSize = nullptr;
-  FunctionCallee KitsuneGPURunKernel = nullptr;
-  FunctionCallee KitsuneGPUFinish = nullptr;
-public:
-  KitsuneCudaLoop(Module &M);
-
-  void processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
-                               DominatorTree &DT) override final;
-};
+//class KitsuneCudaLoop : public PTXLoop {
+//private:
+//  FunctionCallee KitsuneCUDAInit = nullptr;
+//  FunctionCallee KitsuneGPUInitKernel = nullptr;
+//  FunctionCallee KitsuneGPUInitField = nullptr;
+//  FunctionCallee KitsuneGPUSetRunSize = nullptr;
+//  FunctionCallee KitsuneGPURunKernel = nullptr;
+//  FunctionCallee KitsuneGPUFinish = nullptr;
+//public:
+//  KitsuneCudaLoop(Module &M);
+//
+//  void processOutlinedLoopCall(TapirLoopInfo &TL, TaskOutlineInfo &TOI,
+//                               DominatorTree &DT) override final;
+//};
 
 class CudaABI : public TapirTarget {
   PTXLoop *LOP = nullptr;

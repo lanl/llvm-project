@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include <cuda.h>
+#include <cuda_runtime_api.h>
 
 extern "C" 
 {
@@ -24,6 +25,8 @@ extern "C"
   /// these values are referred as "device IDs". 
   extern void __kitsune_cudart_initialize();
 
+
+  extern void __kitsune_cudart_malloc_float(float *dataPtr, int dataSize);
   /// Shutdown the cuda runtime layer freeing all the resources that 
   /// were acquired during execution.  This call will error internally 
   /// (and fatally) if any errors occur.  In particular, calling this 
