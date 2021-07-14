@@ -289,7 +289,7 @@ static bool tryToStripMineLoop(
     return false;
 
   // Copy metadata to remainder loop
-  if (RemainderLoop) {
+  if (RemainderLoop && OrigLoopID) {
     // Optional<MDNode *> RemainderLoopID = makeFollowupLoopID(
     //     OrigLoopID, {}, "tapir.loop");
     MDNode *NewRemainderLoopID =

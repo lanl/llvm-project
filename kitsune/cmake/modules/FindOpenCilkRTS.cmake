@@ -13,7 +13,7 @@ find_path(OpenCilkRTS_INCLUDE_DIR cilk/cilk.h
   PATHS /usr/local/include
         /opt/include
         /opt/local/include
-        $ENV{OPENCILKRTS_PATH}/include
+        $ENV{OpenCilkRTS_PATH}/include
 )
 
 find_library(OpenCilkRTS_LIBRARY opencilk
@@ -23,8 +23,8 @@ find_library(OpenCilkRTS_LIBRARY opencilk
         /opt/lib
         /opt/local/lib64
         /opt/local/lib
-        $ENV{OPENCILKRTS_PATH}/lib
-        $ENV{OPENCILKRTS_PATH}/lib64
+        $ENV{OpenCilkRTS_PATH}/lib
+        $ENV{OpenCilkRTS_PATH}/lib64
 )
 
 include(FindPackageHandleStandardArgs)

@@ -92,17 +92,7 @@ if (KITSUNE_ENABLE_OPENCL_TARGET)
   add_subdirectory(lib/OpenCL)
 endif()
 
-find_package(CilkRTS)
-option(KITSUNE_ENABLE_CILKRTS_TARGET
-  "Enable Cilk runtime backend target." ${CilkRTS_FOUND})
-if (KITSUNE_ENABLE_CILKRTS_TARGET)
-  set(CILKRTS_EXTRA_LINK_LIBS ""
-    CACHE
-    STRING "Extra link libraries for the Cilk runtime target."
-  )
-endif()
-
-find_package(OpenCilk)
+find_package(OpenCilkRTS)
 option(KITSUNE_ENABLE_OPENCILKRTS_TARGET
   "Enable OpenCilk runtime backend target." ${OpenCilk_FOUND})
 if (KITSUNE_ENABLE_OPENCILKRTS_TARGET)

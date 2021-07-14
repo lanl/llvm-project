@@ -16,6 +16,7 @@ set(LLVM_OPTIONAL_SOURCES
   complex.cpp
   matmult1.cpp
   normalize.cpp
+  raytrace.cpp
   vecadd.cpp
 )
 
